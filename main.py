@@ -6,7 +6,7 @@
 import time
 import logging
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -256,6 +256,18 @@ def _aktif_semboller() -> List[str]:
 # VERİ TARAMA
 # ──────────────────────────────────────────────
 
+def _test_binance_baglanti() -> Tuple[bool, str]:
+    """Binance API'ye test isteği atar, sonucu döndürür."""
+    import requests as req
+    try:
+        r = req.get("https://fapi.binance.com/fapi/v1/ping", timeout=10)
+        if r.status_code == 200:
+            return True, "OK"
+        return False, f"HTTP {r.status_code}"
+    except Exception as e:
+        return False, str(e)
+
+
 def veri_tara(zorunlu: bool = False) -> None:
     """
     Canlı veriyi tarar ve session_state'e yazar.
@@ -267,6 +279,13 @@ def veri_tara(zorunlu: bool = False) -> None:
         if gecen < STALE_DAKIKA:
             return
 
+    # Önce bağlantı testi
+    bagli, hata_mesaj = _test_binance_baglanti()
+    if not bagli:
+        st.error(f"❌ Binance API'ye ulaşılamıyor: `{hata_mesaj}`")
+        st.info("💡 Render free plan bazen Binance IP'lerini engeller. Sayfayı yenile veya birkaç dakika bekle.")
+        return
+
     exchange = get_cached_exchange()
     semboller = filtrele_gecerli_semboller(exchange, _aktif_semboller())
     periyot   = st.session_state["global_periyot"]
@@ -276,7 +295,8 @@ def veri_tara(zorunlu: bool = False) -> None:
     prog.empty()
 
     if not tum_data:
-        st.error("❌ Veri çekilemedi. Bağlantıyı kontrol edin.")
+        st.error("❌ Veri çekilemedi — Binance'e bağlanıldı ama veri gelmedi.")
+        st.info("Periyot olarak **1 Gün** seç ve tekrar dene.")
         return
 
     btc_df = tum_data.pop("BTC", None)
