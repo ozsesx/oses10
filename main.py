@@ -157,14 +157,15 @@ def sifre_kontrolu() -> bool:
         giris = st.form_submit_button("Giriş Yap", use_container_width=True)
 
     if giris:
+        import os
         try:
-            # Önce environment variable dene (Render), yoksa secrets, yoksa fallback
-            import os
             dogru_sifre = (
                 os.environ.get("APP_PASSWORD")
                 or st.secrets.get("passwords", {}).get("app_password")
                 or "admin"
             )
+        except Exception:
+            dogru_sifre = os.environ.get("APP_PASSWORD", "admin")
 
         if sifre == dogru_sifre:
             st.session_state["giris_yapildi"] = True
