@@ -17,18 +17,22 @@ MAX_COIN = 70                   # Sabit 60 + maks 10 manuel ek
 MAX_MANUEL_EK = 10
 
 # ──────────────────────────────────────────────
-# BİNANCE API
+# BYBIT API (Binance ABD sunucularında bloke — Bybit açık)
 # ──────────────────────────────────────────────
-EXCHANGE_ID = "binanceusdm"     # ccxt exchange id (USDT-M perpetual)
-REQUEST_DELAY = 0.3             # İstekler arası bekleme (saniye)
-ARCHIVE_DELAY = 1.5             # Arşiv çekiminde coin başı bekleme (saniye)
-RATE_LIMIT_WAIT = [5, 15, 45]  # Exponential backoff (saniye)
+EXCHANGE_ID = "bybit"
+REQUEST_DELAY = 0.3
+ARCHIVE_DELAY = 1.5
+RATE_LIMIT_WAIT = [5, 15, 45]
 MAX_RETRY = 3
 
-# Binance USDT-M REST endpoint (public, API key gerekmez)
-BINANCE_BASE_URL = "https://fapi.binance.com"
-FUNDING_RATE_URL = f"{BINANCE_BASE_URL}/fapi/v1/fundingRate"
-TICKER_URL       = f"{BINANCE_BASE_URL}/fapi/v1/ticker/24hr"
+BYBIT_BASE_URL   = "https://api.bybit.com"
+KLINES_URL       = f"{BYBIT_BASE_URL}/v5/market/kline"
+TICKER_URL       = f"{BYBIT_BASE_URL}/v5/market/tickers"
+FUNDING_RATE_URL = f"{BYBIT_BASE_URL}/v5/market/funding/history"
+PING_URL         = f"{BYBIT_BASE_URL}/v5/market/time"
+
+# Eski compat
+BINANCE_BASE_URL = BYBIT_BASE_URL
 
 # ──────────────────────────────────────────────
 # PERIYOT → CCXT TIMEFRAME EŞLEŞMESİ

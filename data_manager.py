@@ -1,4 +1,4 @@
-# data_manager.py — Binance Veri Çekme Motoru (doğrudan REST API)
+# data_manager.py — Bybit USDT Perpetual Veri Çekme Motoru
 # ─────────────────────────────────────────────────────────────────────────────
 
 import time
@@ -12,7 +12,7 @@ import numpy as np
 
 from config import (
     REQUEST_DELAY, RATE_LIMIT_WAIT, MAX_RETRY,
-    BINANCE_BASE_URL, FUNDING_RATE_URL, TICKER_URL,
+    KLINES_URL, TICKER_URL, FUNDING_RATE_URL, PING_URL,
     PERIYOT_KONFIG, SABIT_COINLER, MAX_COIN,
     HACIM_PATLAMA_KATI, BTC_PANEL_KONFIG,
 )
@@ -20,22 +20,16 @@ from archive_manager import save_funding_rates
 
 logger = logging.getLogger(__name__)
 
-# Binance Futures OHLCV endpoint
-KLINES_URL = f"{BINANCE_BASE_URL}/fapi/v1/klines"
 
 # ──────────────────────────────────────────────
-# EXCHANGE COMPAT SHIM (scoring/archive için)
+# FAKE EXCHANGE (archive_manager uyumu için)
 # ──────────────────────────────────────────────
 
 class FakeExchange:
-    """archive_manager'ın beklediği exchange arayüzünü sağlar."""
     def fetch_ohlcv(self, symbol: str, timeframe: str = "1d",
                     since: int = None, limit: int = 1000) -> list:
-        # symbol: "BTC/USDT:USDT" → "BTCUSDT"
         base = symbol.split("/")[0]
-        binance_sym = f"{base}USDT"
-        raw = _fetch_klines_raw(binance_sym, timeframe, since=since, limit=limit)
-        return raw
+        return _fetch_klines_raw(f"{base}USDT", timeframe, since=since, limit=limit)
 
 
 def get_exchange():
@@ -43,19 +37,36 @@ def get_exchange():
 
 
 # ──────────────────────────────────────────────
-# DÜŞÜK SEVİYE: Binance REST klines
+# BYBIT INTERVAL DÖNÜŞÜMÜ
 # ──────────────────────────────────────────────
 
-def _tf_to_binance(tf: str) -> str:
-    """ccxt timeframe → Binance interval string."""
+def _tf_to_bybit(tf: str) -> str:
     mapping = {
-        "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m",
-        "30m": "30m", "1h": "1h", "2h": "2h", "4h": "4h",
-        "6h": "6h", "8h": "8h", "12h": "12h",
-        "1d": "1d", "3d": "3d", "1w": "1w",
+        "1m": "1", "3m": "3", "5m": "5", "15m": "15",
+        "30m": "30", "1h": "60", "2h": "120", "4h": "240",
+        "6h": "360", "8h": "480", "12h": "720",
+        "1d": "D", "3d": "D", "1w": "W",
     }
-    return mapping.get(tf, tf)
+    return mapping.get(tf, "60")
 
+
+# ──────────────────────────────────────────────
+# BAĞLANTI TESTİ
+# ──────────────────────────────────────────────
+
+def test_baglanti() -> Tuple[bool, str]:
+    try:
+        r = requests.get(PING_URL, timeout=10)
+        if r.status_code == 200:
+            return True, "OK"
+        return False, f"HTTP {r.status_code}"
+    except Exception as e:
+        return False, str(e)
+
+
+# ──────────────────────────────────────────────
+# DÜŞÜK SEVİYE: Bybit klines
+# ──────────────────────────────────────────────
 
 def _fetch_klines_raw(
     symbol: str,
@@ -64,30 +75,41 @@ def _fetch_klines_raw(
     limit: int = 500,
 ) -> list:
     """
-    Binance Futures REST /fapi/v1/klines endpoint'inden ham veri çeker.
-    Döndürür: [[open_time, open, high, low, close, volume, ...], ...]
-    ccxt formatında: [[ts_ms, open, high, low, close, volume], ...]
+    Bybit /v5/market/kline endpoint'inden veri çeker.
+    Döndürür: [[ts_ms, open, high, low, close, volume], ...]
     """
-    interval = _tf_to_binance(timeframe)
-    params = {"symbol": symbol, "interval": interval, "limit": min(limit, 1500)}
+    interval = _tf_to_bybit(timeframe)
+    limit    = min(limit, 1000)
+
+    params = {
+        "category": "linear",
+        "symbol":   symbol,
+        "interval": interval,
+        "limit":    limit,
+    }
     if since is not None:
-        params["startTime"] = int(since)
+        params["start"] = int(since)
 
     for attempt in range(MAX_RETRY):
         try:
             resp = requests.get(KLINES_URL, params=params, timeout=15)
-            if resp.status_code == 429 or resp.status_code == 418:
+            if resp.status_code in (429, 418):
                 wait = RATE_LIMIT_WAIT[min(attempt, len(RATE_LIMIT_WAIT) - 1)]
                 logger.warning(f"[Rate Limit] {symbol} → {wait}s bekleniyor")
                 time.sleep(wait)
                 continue
             resp.raise_for_status()
             data = resp.json()
-            if not data or not isinstance(data, list):
+
+            if data.get("retCode") != 0:
+                logger.error(f"[Bybit] {symbol}: {data.get('retMsg')}")
                 return []
-            # Binance formatı: [open_time, open, high, low, close, volume, ...]
+
+            # Bybit formatı: list içinde [startTime, openPrice, highPrice, lowPrice, closePrice, volume, turnover]
+            # Sıra: en yeni önce → ters çevireceğiz
+            rows = data.get("result", {}).get("list", [])
             result = []
-            for row in data:
+            for row in reversed(rows):
                 try:
                     result.append([
                         int(row[0]),    # ts ms
@@ -100,6 +122,7 @@ def _fetch_klines_raw(
                 except (IndexError, ValueError, TypeError):
                     continue
             return result
+
         except requests.exceptions.Timeout:
             logger.warning(f"[Timeout] {symbol} deneme {attempt+1}")
             time.sleep(5)
@@ -127,8 +150,8 @@ def _klines_to_df(raw: list) -> Optional[pd.DataFrame]:
 # ──────────────────────────────────────────────
 
 def fetch_ohlcv_with_resample(
-    exchange,           # FakeExchange (kullanılmıyor, compat için)
-    symbol: str,        # "ETH/USDT:USDT"
+    exchange,
+    symbol: str,
     periyot: str,
 ) -> Optional[pd.DataFrame]:
     konfig = PERIYOT_KONFIG.get(periyot)
@@ -139,10 +162,10 @@ def fetch_ohlcv_with_resample(
     limit  = konfig["limit"]
     resamp = konfig.get("resample")
 
-    base = symbol.split("/")[0]
-    binance_sym = f"{base}USDT"
+    base        = symbol.split("/")[0]
+    bybit_sym   = f"{base}USDT"
 
-    raw = _fetch_klines_raw(binance_sym, tf, limit=limit)
+    raw = _fetch_klines_raw(bybit_sym, tf, limit=limit)
     df  = _klines_to_df(raw)
     if df is None:
         return None
@@ -158,14 +181,13 @@ def fetch_ohlcv_with_resample(
 
 
 def _resample_ohlcv(df: pd.DataFrame, rule: str) -> pd.DataFrame:
-    resampled = df.resample(rule).agg({
+    return df.resample(rule).agg({
         "open":   "first",
         "high":   "max",
         "low":    "min",
         "close":  "last",
         "volume": "sum",
     }).dropna()
-    return resampled
 
 
 # ──────────────────────────────────────────────
@@ -176,11 +198,8 @@ def fetch_btc_panel_data(exchange, btc_periyot: str) -> Optional[pd.DataFrame]:
     konfig = BTC_PANEL_KONFIG.get(btc_periyot)
     if not konfig:
         return None
-    tf     = konfig["tf"]
-    limit  = konfig["limit"]
-    resamp = konfig.get("resample")
 
-    raw = _fetch_klines_raw("BTCUSDT", tf, limit=limit)
+    raw = _fetch_klines_raw("BTCUSDT", konfig["tf"], limit=konfig["limit"])
     df  = _klines_to_df(raw)
     if df is None:
         return None
@@ -189,8 +208,9 @@ def fetch_btc_panel_data(exchange, btc_periyot: str) -> Optional[pd.DataFrame]:
     df.set_index("datetime", inplace=True)
     df.drop(columns=["ts"], inplace=True)
 
-    if resamp:
-        df = _resample_ohlcv(df, resamp)
+    if konfig.get("resample"):
+        df = _resample_ohlcv(df, konfig["resample"])
+
     return df if not df.empty else None
 
 
@@ -205,60 +225,53 @@ def toplu_tarama(
     progress_placeholder=None,
 ) -> Dict[str, pd.DataFrame]:
     tum_data: Dict[str, pd.DataFrame] = {}
-    hatalar: List[str] = []
     total = len(semboller)
 
     for i, sym in enumerate(semboller):
         if progress_placeholder:
             try:
-                progress_placeholder.text(
-                    f"⏳ Taranıyor: {sym} ({i+1}/{total})"
-                )
+                progress_placeholder.text(f"⏳ {sym} taranıyor... ({i+1}/{total})")
             except Exception:
                 pass
-
         try:
             df = fetch_ohlcv_with_resample(exchange, f"{sym}/USDT:USDT", periyot)
             if df is not None and not df.empty:
                 tum_data[sym] = df
-            else:
-                hatalar.append(sym)
         except Exception as e:
             logger.error(f"[Tarama] {sym}: {e}")
-            hatalar.append(sym)
-
         time.sleep(REQUEST_DELAY)
 
     if progress_placeholder:
         try:
-            progress_placeholder.text(
-                f"✅ Tamamlandı: {len(tum_data)}/{total} coin"
-            )
+            progress_placeholder.text(f"✅ Tamamlandı: {len(tum_data)}/{total} coin")
         except Exception:
             pass
-
-    if hatalar:
-        logger.warning(f"[Tarama] Başarısız: {hatalar}")
 
     return tum_data
 
 
 # ──────────────────────────────────────────────
-# 24 SAATLİK HACİM
+# 24 SAATLİK HACİM (Bybit)
 # ──────────────────────────────────────────────
 
 def fetch_24h_volumes() -> Dict[str, float]:
     try:
-        resp = requests.get(TICKER_URL, timeout=10)
+        resp = requests.get(
+            TICKER_URL,
+            params={"category": "linear"},
+            timeout=10,
+        )
         resp.raise_for_status()
         data = resp.json()
+        if data.get("retCode") != 0:
+            return {}
         volumes = {}
-        for item in data:
+        for item in data.get("result", {}).get("list", []):
             sym = item.get("symbol", "")
-            if sym.endswith("USDT"):
+            if sym.endswith("USDT") and "PERP" not in sym:
                 base = sym[:-4]
                 try:
-                    volumes[base] = float(item.get("quoteVolume", 0))
+                    volumes[base] = float(item.get("turnover24h", 0))
                 except (ValueError, TypeError):
                     pass
         return volumes
@@ -285,8 +298,6 @@ def tespit_hacim_patlamasi(
 
 def get_sorted_symbols_by_volume() -> List[str]:
     volumes = fetch_24h_volumes()
-    if not volumes:
-        return []
     return sorted(volumes.keys(), key=lambda s: volumes[s], reverse=True)
 
 
@@ -294,56 +305,55 @@ def get_sorted_symbols_by_volume() -> List[str]:
 # GEÇERLİ SEMBOL FİLTRESİ
 # ──────────────────────────────────────────────
 
-_gecerli_semboller_cache: Optional[List[str]] = None
+_gecerli_cache: Optional[List[str]] = None
 _gecerli_cache_zaman: float = 0.0
 CACHE_TTL = 3600
 
 
 def filtrele_gecerli_semboller(exchange, semboller: List[str]) -> List[str]:
-    """
-    Binance'te aktif olan sembolleri döndürür.
-    24h ticker'dan kontrol eder, 1 saat önbelleğe alır.
-    """
-    global _gecerli_semboller_cache, _gecerli_cache_zaman
+    global _gecerli_cache, _gecerli_cache_zaman
     now = time.time()
-    if _gecerli_semboller_cache and (now - _gecerli_cache_zaman) < CACHE_TTL:
-        available = set(_gecerli_semboller_cache)
+    if _gecerli_cache and (now - _gecerli_cache_zaman) < CACHE_TTL:
+        available = set(_gecerli_cache)
         return [s for s in semboller if s in available]
 
     volumes = fetch_24h_volumes()
     if not volumes:
-        # API erişilemiyorsa listeyi olduğu gibi dön
         return semboller
 
     available = set(volumes.keys())
-    _gecerli_semboller_cache = list(available)
+    _gecerli_cache = list(available)
     _gecerli_cache_zaman = now
-    valid   = [s for s in semboller if s in available]
-    invalid = [s for s in semboller if s not in available]
-    if invalid:
-        logger.info(f"[Filtre] Binance'te bulunamadı: {invalid}")
+    valid = [s for s in semboller if s in available]
     return valid if valid else semboller
 
 
 # ──────────────────────────────────────────────
-# FUNDING RATE
+# FUNDING RATE (Bybit)
 # ──────────────────────────────────────────────
 
 def fetch_funding_rates(semboller: List[str], limit: int = 100) -> Dict[str, list]:
     result = {}
     for sym in semboller:
-        binance_sym = f"{sym}USDT"
         try:
             resp = requests.get(
                 FUNDING_RATE_URL,
-                params={"symbol": binance_sym, "limit": limit},
+                params={"category": "linear", "symbol": f"{sym}USDT", "limit": limit},
                 timeout=10,
             )
             resp.raise_for_status()
-            records = resp.json()
-            if isinstance(records, list) and records:
-                save_funding_rates(sym, records)
-                result[sym] = records
+            data = resp.json()
+            if data.get("retCode") == 0:
+                rows = data.get("result", {}).get("list", [])
+                # Bybit → Binance formatına çevir
+                records = [
+                    {"fundingTime": int(r["fundingRateTimestamp"]),
+                     "fundingRate": float(r["fundingRate"])}
+                    for r in rows
+                ]
+                if records:
+                    save_funding_rates(sym, records)
+                    result[sym] = records
         except Exception as e:
             logger.warning(f"[Funding] {sym}: {e}")
         time.sleep(REQUEST_DELAY)
@@ -354,13 +364,15 @@ def fetch_latest_funding_rate(symbol: str) -> Optional[float]:
     try:
         resp = requests.get(
             FUNDING_RATE_URL,
-            params={"symbol": f"{symbol}USDT", "limit": 1},
+            params={"category": "linear", "symbol": f"{symbol}USDT", "limit": 1},
             timeout=10,
         )
         resp.raise_for_status()
-        records = resp.json()
-        if records and isinstance(records, list):
-            return float(records[-1].get("fundingRate", 0))
+        data = resp.json()
+        if data.get("retCode") == 0:
+            rows = data.get("result", {}).get("list", [])
+            if rows:
+                return float(rows[0]["fundingRate"])
     except Exception as e:
         logger.warning(f"[Funding Anlık] {symbol}: {e}")
     return None

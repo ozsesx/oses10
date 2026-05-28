@@ -257,10 +257,10 @@ def _aktif_semboller() -> List[str]:
 # ──────────────────────────────────────────────
 
 def _test_binance_baglanti() -> Tuple[bool, str]:
-    """Binance API'ye test isteği atar, sonucu döndürür."""
+    """Bybit API'ye test isteği atar, sonucu döndürür."""
     import requests as req
     try:
-        r = req.get("https://fapi.binance.com/fapi/v1/ping", timeout=10)
+        r = req.get("https://api.bybit.com/v5/market/time", timeout=10)
         if r.status_code == 200:
             return True, "OK"
         return False, f"HTTP {r.status_code}"
@@ -282,8 +282,8 @@ def veri_tara(zorunlu: bool = False) -> None:
     # Önce bağlantı testi
     bagli, hata_mesaj = _test_binance_baglanti()
     if not bagli:
-        st.error(f"❌ Binance API'ye ulaşılamıyor: `{hata_mesaj}`")
-        st.info("💡 Render free plan bazen Binance IP'lerini engeller. Sayfayı yenile veya birkaç dakika bekle.")
+        st.error(f"❌ Bybit API'ye ulaşılamıyor: `{hata_mesaj}`")
+        st.info("💡 Sayfayı yenile veya birkaç dakika bekle.")
         return
 
     exchange = get_cached_exchange()
