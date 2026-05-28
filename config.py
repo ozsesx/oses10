@@ -99,7 +99,7 @@ DONGÜ_ETIKET = {
 # ──────────────────────────────────────────────
 # VERİTABANI
 # ──────────────────────────────────────────────
-DB_PATH        = "/data/archive.db"   # Render.com persistent disk
+DB_PATH        = "/tmp/archive.db"    # Render.com free plan (restart'ta sıfırlanır)
 DB_PATH_LOCAL  = "./archive.db"       # Yerel geliştirme için fallback
 ARCHIVE_DAYS   = 365                  # 1 yıllık arşiv
 

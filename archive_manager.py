@@ -25,9 +25,10 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────
 
 def get_db_path() -> str:
-    if os.path.isdir("/data"):
-        return DB_PATH
-    return DB_PATH_LOCAL
+    # Render free plan'da /data yok, /tmp kullan; local'de ./archive.db
+    if os.environ.get("RENDER"):
+        return DB_PATH          # /tmp/archive.db
+    return DB_PATH_LOCAL        # ./archive.db
 
 
 def get_connection() -> sqlite3.Connection:
