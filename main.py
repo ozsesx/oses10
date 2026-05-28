@@ -158,9 +158,13 @@ def sifre_kontrolu() -> bool:
 
     if giris:
         try:
-            dogru_sifre = st.secrets["passwords"]["app_password"]
-        except Exception:
-            dogru_sifre = "admin"  # Development fallback
+            # Önce environment variable dene (Render), yoksa secrets, yoksa fallback
+            import os
+            dogru_sifre = (
+                os.environ.get("APP_PASSWORD")
+                or st.secrets.get("passwords", {}).get("app_password")
+                or "admin"
+            )
 
         if sifre == dogru_sifre:
             st.session_state["giris_yapildi"] = True
